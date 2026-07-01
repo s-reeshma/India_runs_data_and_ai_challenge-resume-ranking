@@ -1,6 +1,7 @@
 import json
 from sentence_transformers import SentenceTransformer,util 
 import torch
+import csv
 file_path = r"C:\Users\csekh\OneDrive\Desktop\[PUB] India_runs_data_and_ai_challenge (1)\[PUB] India_runs_data_and_ai_challenge\data\candidates.jsonl"
 
 candidates = []
@@ -23,7 +24,7 @@ with open(file_path, 'r', encoding='utf-8') as file:
 
 print(f"Successfully loaded {len(candidates)} candidates!")
 print("Flattening data...")
-test_candidates = candidates[:1000]
+test_candidates = candidates
 texts_to_embed = [flatten_candidate(c) for c in test_candidates]
 print(f"First candidate looks like this to the AI:\n{texts_to_embed[0]}\n")
 print("Downloading/Loading Embedding Model (this takes a moment the first time)...")
@@ -86,3 +87,20 @@ print(f"--- BEHAVIORAL FILTER COMPLETE ---")
 print(f"New Top match ID: {new_top['candidate']['candidate_id']}")
 print(f"New Top Title: {new_top['candidate']['profile']['current_title']}")
 print(f"New Top Score: {new_top['final_score']:.4f}")
+print("\nGenerating submission.csv...")
+top_100 = scored_candidates[:100]
+output_filename = 'Technyx.csv'
+with open(output_filename, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(["candidate_id", "rank", "score", "reasoning"])
+    for rank_index, item in enumerate(top_100):
+        candidate_id = item['candidate']['candidate_id']
+        rank = rank_index + 1
+        score = min(item['final_score'], 0.9999)
+        title = item['candidate'].get('profile', {}).get('current_title', 'Professional')
+        exp = item['candidate'].get('profile', {}).get('years_of_experience', 0)
+        skills_len = len(item['candidate'].get('skills', []))
+        reasoning = f"{title} with {exp} yrs exp and {skills_len} core skills. Strong semantic match with verified behavioral signals."
+        writer.writerow([candidate_id, rank, f"{score:.4f}", reasoning])
+print(f"\nDone! Top 100 candidates saved to {output_filename}")
+print(f"Now run: python validate_submission.py {output_filename}")
