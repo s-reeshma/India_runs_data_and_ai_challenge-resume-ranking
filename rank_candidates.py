@@ -5,21 +5,62 @@ import csv
 file_path = r"C:\Users\csekh\OneDrive\Desktop\[PUB] India_runs_data_and_ai_challenge (1)\[PUB] India_runs_data_and_ai_challenge\data\candidates.jsonl"
 
 candidates = []
-def calculate_explicit_modifiers(candidate):
+def calculate_explicit_modifiers(candidate, semantic_score):
+    modifier = 0.0
+    reasons = []
+    
     profile = candidate.get('profile', {})
     title = profile.get('current_title', '').lower()
+    total_exp = profile.get('years_of_experience', 0)
+    
     skills = [s.get('name', '').lower() for s in candidate.get('skills', [])]
-    modifier = 0.0
-    trap_titles = ['marketing', 'sales', 'hr', 'human resources', 'recruiter', 'accountant', 'content']
+    career_history = candidate.get('career_history', [])
+    signals = candidate.get('redrob_signals', {})
+    
+    trap_titles = ['marketing', 'sales', 'hr', 'human resources', 'recruiter', 'accountant', 'content', 'civil', 'mechanical']
     if any(trap in title for trap in trap_titles):
-        modifier -= 0.50  
+        modifier -= 0.60
+        reasons.append("Title Trap Penalty")
         
-    bonus_keywords = ['eval', 'evaluation', 'prompt', 'prompt engineering', 'fine-tune', 'fine-tuning']
+    is_proven_builder = semantic_score >= 0.55 
+    
+    vector_dbs = ['pinecone', 'weaviate', 'qdrant', 'milvus', 'opensearch', 'elasticsearch', 'faiss']
+    embeddings = ['sentence-transformers', 'openai', 'bge', 'e5', 'embeddings', 'retrieval', 'rag']
+    
+    has_vector_db = any(any(v in s for v in vector_dbs) for s in skills)
+    has_embedding = any(any(e in s for e in embeddings) for s in skills)
+    
+    if is_proven_builder:
+        modifier += 0.05
+        reasons.append("Semantic Capability Bonus")
+    else:
+        if not has_vector_db:
+            modifier -= 0.15
+            reasons.append("Missing Vector DB")
+        if not has_embedding:
+            modifier -= 0.15
+            reasons.append("Missing Embeddings")
+            
+    bonus_keywords = ['lora', 'qlora', 'peft', 'xgboost', 'learning-to-rank', 'distributed systems', 'open-source']
     for skill in skills:
         if any(bonus in skill for bonus in bonus_keywords):
-            modifier += 0.03 
+            modifier += 0.03
+            reasons.append(f"Bonus: {skill}")
             
-    return modifier
+    if len(career_history) > 2:
+        total_months = sum(job.get('duration_months', 0) for job in career_history)
+        avg_tenure = total_months / len(career_history)
+        if avg_tenure < 18:
+            modifier -= 0.30
+            reasons.append("Job Hopper Penalty")
+            
+    github_score = signals.get('github_activity_score', -1)
+    if total_exp >= 5.0 and github_score == -1:
+        modifier -= 0.25
+        reasons.append("Closed-Source Veteran Penalty")
+        
+    return modifier, reasons
+
 def flatten_candidate(candidate):
     skills_list = candidate.get('skills', [])
     skill_strings = []
@@ -78,47 +119,67 @@ print(f"Top match Score: {top_score:.4f}")
 print("\nApplying Behavioral Traps & Multipliers...")
 def calculate_behavioral_multiplier(signals):
     multiplier = 1.0
+    reasons = []
+    
     response_rate = signals.get('recruiter_response_rate', 0.5)
     if response_rate < 0.20:
         multiplier *= 0.1
+        reasons.append("Severe Ghosting Penalty")
     elif response_rate < 0.50:
         multiplier *= 0.6
+        reasons.append("Ghosting Penalty")
+        
     interview_completion = signals.get('interview_completion_rate', 1.0)
     if interview_completion < 0.50:
         multiplier *= 0.2
+        reasons.append("Interview Flake Penalty")
+        
     if signals.get('open_to_work_flag', False):
         multiplier *= 1.2
+        reasons.append("Active Seeker Boost")
+        
     recent_searches = signals.get('search_appearance_30d', 1)
     if recent_searches == 0:
         multiplier *= 0.8
-    return multiplier
+        reasons.append("Inactivity Penalty")
+        
+    return multiplier, reasons
 for item in scored_candidates:
     candidate = item['candidate']
     signals = candidate.get('redrob_signals', {})
     base_score = item['semantic_score']
-    explicit_modifier = calculate_explicit_modifiers(candidate)
-    behavior_multiplier = calculate_behavioral_multiplier(signals)
+    
+    explicit_modifier, explicit_reasons = calculate_explicit_modifiers(candidate, base_score)
+    behavior_multiplier, behavior_reasons = calculate_behavioral_multiplier(signals)
+    
     item['final_score'] = (base_score + explicit_modifier) * behavior_multiplier
-scored_candidates = sorted(scored_candidates, key=lambda x: x['final_score'], reverse=True)
+    
+    all_reasons = explicit_reasons + behavior_reasons
+    if not all_reasons:
+        all_reasons = ["Strong baseline match"]
+        
+    item['reasoning'] = ", ".join(all_reasons)
+
+scored_candidates.sort(key=lambda x: (-round(x['final_score'], 4), x['candidate']['candidate_id']))
 new_top = scored_candidates[0]
-print(f"--- BEHAVIORAL FILTER COMPLETE ---")
+print(f"--- BEHAVIORAL FILTER COMPLETE AND TRAPS IDENTIFIED ---")
 print(f"New Top match ID: {new_top['candidate']['candidate_id']}")
 print(f"New Top Title: {new_top['candidate']['profile']['current_title']}")
 print(f"New Top Score: {new_top['final_score']:.4f}")
 print("\nGenerating submission.csv...")
-top_100 = scored_candidates[:100]
-output_filename = 'Technyx_v2.csv'
-with open(output_filename, 'w', newline='', encoding='utf-8') as f:
+output_filename = 'technyx.csv'
+with open(output_filename, 'w', newline='') as f:
     writer = csv.writer(f)
     writer.writerow(["candidate_id", "rank", "score", "reasoning"])
-    for rank_index, item in enumerate(top_100):
+    
+    for rank_index, item in enumerate(scored_candidates[:100]):
         candidate_id = item['candidate']['candidate_id']
         rank = rank_index + 1
-        score = min(item['final_score'], 0.9999)
-        title = item['candidate'].get('profile', {}).get('current_title', 'Professional')
-        exp = item['candidate'].get('profile', {}).get('years_of_experience', 0)
-        skills_len = len(item['candidate'].get('skills', []))
-        reasoning = f"{title} with {exp} yrs exp and {skills_len} core skills. Strong semantic match with verified behavioral signals."
+        score = round(item['final_score'], 4)
+        score = min(score, 0.9999) 
+        
+        reasoning = item.get('reasoning', "Strong baseline match")
+        
         writer.writerow([candidate_id, rank, f"{score:.4f}", reasoning])
-print(f"\nDone! Top 100 candidates saved to {output_filename}")
-print(f"Now run: python validate_submission.py {output_filename}")
+
+print(f"\nDone! Top 100 candidates saved to {output_filename}. Tie-breaker applied.")
